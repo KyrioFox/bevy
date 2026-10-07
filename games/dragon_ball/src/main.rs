@@ -33,7 +33,10 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, (sync_fighter_auras, refresh_hud).chain())
+        .add_systems(
+            Update,
+            (handle_flow_controls, sync_fighter_auras, refresh_hud).chain(),
+        )
         .run();
 }
 
@@ -45,6 +48,12 @@ struct CpuFighter;
 
 #[derive(Component)]
 struct MatchHud;
+
+#[derive(Component)]
+struct MatchOverlay;
+
+#[derive(Component)]
+struct MatchVisual;
 
 #[derive(Component)]
 struct FighterAura(Entity);
@@ -99,6 +108,15 @@ enum Side {
     Cpu,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchPhase {
+    Menu,
+    Fighting,
+    Paused,
+    RoundOver,
+    MatchOver,
+}
+
 #[derive(Component)]
 struct KiBlast {
     owner: Entity,
@@ -115,7 +133,7 @@ struct MatchState {
     round: u32,
     player_wins: u32,
     cpu_wins: u32,
-    resolved: bool,
+    phase: MatchPhase,
     reset_in: f32,
     message: &'static str,
 }
@@ -126,9 +144,9 @@ impl Default for MatchState {
             round: 1,
             player_wins: 0,
             cpu_wins: 0,
-            resolved: false,
+            phase: MatchPhase::Menu,
             reset_in: 0.0,
-            message: "Fight!",
+            message: "Press ENTER to begin",
         }
     }
 }
@@ -181,7 +199,9 @@ fn setup(
         MatchHud,
     ));
     commands.spawn((
-        Text::new("A / D move    SPACE jump    J strike    K ki blast    LEFT SHIFT dash"),
+        Text::new(
+            "A / D move    SPACE jump    J strike    K ki blast    LEFT SHIFT dash    ESC pause",
+        ),
         TextFont {
             font_size: FontSize::Px(17.0),
             ..default()
@@ -193,6 +213,23 @@ fn setup(
             left: px(22),
             ..default()
         },
+    ));
+    commands.spawn((
+        Text::new("DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\nPress ENTER to fight"),
+        TextFont {
+            font_size: FontSize::Px(38.0),
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.84, 0.38)),
+        TextLayout::justify(Justify::Center),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(232),
+            left: px(300),
+            width: px(680),
+            ..default()
+        },
+        MatchOverlay,
     ));
 }
 
@@ -215,6 +252,8 @@ fn spawn_fighter(commands: &mut Commands, side: Side, position: Vec2) {
         .spawn((
             Sprite::from_color(body, Vec2::new(64.0, 116.0)),
             Transform::from_xyz(position.x, position.y, 1.0),
+            Visibility::Hidden,
+            MatchVisual,
             Fighter::new(name, facing),
         ))
         .id();
@@ -229,6 +268,8 @@ fn spawn_fighter(commands: &mut Commands, side: Side, position: Vec2) {
     commands.spawn((
         Sprite::from_color(aura, Vec2::new(112.0, 150.0)),
         Transform::from_xyz(position.x, position.y, 0.2),
+        Visibility::Hidden,
+        MatchVisual,
         FighterAura(entity),
     ));
 }
@@ -240,7 +281,7 @@ fn read_player_input(
 ) {
     let fighter = &mut *player;
     fighter.intent = FighterIntent::default();
-    if state.resolved {
+    if state.phase != MatchPhase::Fighting {
         return;
     }
     fighter.intent.movement = (if keyboard.pressed(KeyCode::KeyD) {
@@ -265,7 +306,7 @@ fn drive_cpu(
 ) {
     let (fighter, transform) = &mut *cpu;
     fighter.intent = FighterIntent::default();
-    if state.resolved {
+    if state.phase != MatchPhase::Fighting {
         return;
     }
     let distance = player.translation.x - transform.translation.x;
@@ -285,7 +326,7 @@ fn move_fighters(
     state: Res<MatchState>,
     mut fighters: Query<(&mut Fighter, &mut Transform, &mut Sprite)>,
 ) {
-    if state.resolved {
+    if state.phase != MatchPhase::Fighting {
         return;
     }
     let delta = time.delta_secs();
@@ -338,7 +379,7 @@ fn fighter_attacks(
     mut damage: ResMut<DamageQueue>,
     mut fighters: Query<(Entity, &mut Fighter, &Transform)>,
 ) {
-    if state.resolved {
+    if state.phase != MatchPhase::Fighting {
         return;
     }
     let positions: Vec<_> = fighters
@@ -380,6 +421,7 @@ fn fighter_attacks(
                     transform.translation.y + 8.0,
                     2.0,
                 ),
+                MatchVisual,
                 KiBlast {
                     owner: entity,
                     side,
@@ -408,7 +450,10 @@ fn move_and_collide_projectiles(
 ) {
     let delta = time.delta_secs();
     for (blast_entity, mut blast_transform, mut blast) in &mut blasts {
-        if state.resolved {
+        if state.phase == MatchPhase::Paused {
+            continue;
+        }
+        if state.phase != MatchPhase::Fighting {
             commands.entity(blast_entity).despawn();
             continue;
         }
@@ -456,6 +501,66 @@ fn apply_queued_damage(
     }
 }
 
+fn handle_flow_controls(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut state: ResMut<MatchState>,
+    mut visuals: Query<&mut Visibility, With<MatchVisual>>,
+    mut fighters: Query<(&mut Fighter, &mut Transform, &mut Sprite)>,
+) {
+    match state.phase {
+        MatchPhase::Menu if keyboard.just_pressed(KeyCode::Enter) => {
+            state.phase = MatchPhase::Fighting;
+            state.message = "Fight!";
+            for mut visibility in &mut visuals {
+                *visibility = Visibility::Inherited;
+            }
+        }
+        MatchPhase::Fighting if keyboard.just_pressed(KeyCode::Escape) => {
+            state.phase = MatchPhase::Paused;
+            state.message = "PAUSED\n\nPress ESC to resume";
+        }
+        MatchPhase::Paused if keyboard.just_pressed(KeyCode::Escape) => {
+            state.phase = MatchPhase::Fighting;
+            state.message = "Fight!";
+        }
+        MatchPhase::MatchOver if keyboard.just_pressed(KeyCode::Enter) => {
+            state.round = 1;
+            state.player_wins = 0;
+            state.cpu_wins = 0;
+            state.phase = MatchPhase::Fighting;
+            state.message = "Fight!";
+            reset_fighters(&mut fighters);
+        }
+        _ => {}
+    }
+}
+
+fn reset_fighters(fighters: &mut Query<(&mut Fighter, &mut Transform, &mut Sprite)>) {
+    for (mut fighter, mut transform, mut sprite) in fighters.iter_mut() {
+        fighter.health = 100;
+        fighter.ki = 100;
+        fighter.ki_regen = 0.0;
+        fighter.velocity = Vec2::ZERO;
+        fighter.hit_flash = 0.0;
+        fighter.light_cooldown = 0.0;
+        fighter.blast_cooldown = 0.0;
+        fighter.dash_cooldown = 0.0;
+        fighter.dash_time = 0.0;
+        fighter.intent = FighterIntent::default();
+        transform.translation.x = if fighter.name == "Goku" {
+            -300.0
+        } else {
+            300.0
+        };
+        transform.translation.y = GROUND_Y + FIGHTER_HALF_HEIGHT;
+        sprite.color = if fighter.name == "Goku" {
+            Color::srgb(0.96, 0.38, 0.08)
+        } else {
+            Color::srgb(0.12, 0.38, 0.96)
+        };
+    }
+}
+
 fn advance_round(
     time: Res<Time<Fixed>>,
     mut state: ResMut<MatchState>,
@@ -467,43 +572,32 @@ fn advance_round(
     let cpu_down = fighters
         .iter()
         .any(|(fighter, _, _)| fighter.name == "Vegeta" && fighter.health == 0);
-    if !state.resolved && (player_down || cpu_down) {
-        state.resolved = true;
+    if state.phase == MatchPhase::Fighting && (player_down || cpu_down) {
+        state.phase = MatchPhase::RoundOver;
         state.reset_in = 2.0;
         if player_down {
             state.cpu_wins += 1;
-            state.message = "Vegeta wins the round";
+            state.message = "VEGETA WINS THE ROUND";
         } else {
             state.player_wins += 1;
-            state.message = "Goku wins the round";
+            state.message = "GOKU WINS THE ROUND";
         }
     }
-    if state.resolved {
+    if state.phase == MatchPhase::RoundOver {
         state.reset_in -= time.delta_secs();
         if state.reset_in <= 0.0 {
-            state.round += 1;
-            state.resolved = false;
-            state.message = "Fight!";
-            for (mut fighter, mut transform, mut sprite) in &mut fighters {
-                fighter.health = 100;
-                fighter.ki = 100;
-                fighter.ki_regen = 0.0;
-                fighter.velocity = Vec2::ZERO;
-                fighter.hit_flash = 0.0;
-                fighter.light_cooldown = 0.0;
-                fighter.blast_cooldown = 0.0;
-                fighter.dash_cooldown = 0.0;
-                transform.translation.x = if fighter.name == "Goku" {
-                    -300.0
+            if state.player_wins == 2 || state.cpu_wins == 2 {
+                state.phase = MatchPhase::MatchOver;
+                state.message = if state.player_wins == 2 {
+                    "GOKU WINS THE MATCH\n\nPress ENTER for a rematch"
                 } else {
-                    300.0
+                    "VEGETA WINS THE MATCH\n\nPress ENTER for a rematch"
                 };
-                transform.translation.y = GROUND_Y + FIGHTER_HALF_HEIGHT;
-                sprite.color = if fighter.name == "Goku" {
-                    Color::srgb(0.96, 0.38, 0.08)
-                } else {
-                    Color::srgb(0.12, 0.38, 0.96)
-                };
+            } else {
+                state.round += 1;
+                state.phase = MatchPhase::Fighting;
+                state.message = "FIGHT!";
+                reset_fighters(&mut fighters);
             }
         }
     }
@@ -513,12 +607,22 @@ fn refresh_hud(
     state: Res<MatchState>,
     fighters: Query<&Fighter>,
     mut hud: Single<&mut Text, With<MatchHud>>,
+    mut overlay: Single<&mut Text, With<MatchOverlay>>,
 ) {
+    overlay.0 = match state.phase {
+        MatchPhase::Menu => {
+            "DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\nPress ENTER to fight".to_owned()
+        }
+        MatchPhase::Paused => "PAUSED\n\nPress ESC to resume".to_owned(),
+        MatchPhase::RoundOver => format!("{}\n\nNext round...", state.message),
+        MatchPhase::MatchOver => state.message.to_owned(),
+        MatchPhase::Fighting => String::new(),
+    };
     let player = fighters.iter().find(|fighter| fighter.name == "Goku");
     let cpu = fighters.iter().find(|fighter| fighter.name == "Vegeta");
     if let (Some(player), Some(cpu)) = (player, cpu) {
         hud.0 = format!(
-            "ROUND {}      {}  HP {:>3}  KI {:>3}      {:^24}      {}  HP {:>3}  KI {:>3}      SCORE {} - {}",
+            "ROUND {}      {}  HP {:>3}  KI {:>3}      {}      {}  HP {:>3}  KI {:>3}      SCORE {} - {}",
             state.round,
             player.name,
             player.health,
