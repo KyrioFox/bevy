@@ -24,6 +24,7 @@ fn main() {
             FixedUpdate,
             (
                 read_player_input,
+                read_player_two_input,
                 drive_cpu,
                 move_fighters,
                 fighter_attacks,
@@ -45,6 +46,9 @@ struct PlayerFighter;
 
 #[derive(Component)]
 struct CpuFighter;
+
+#[derive(Component)]
+struct PlayerTwoFighter;
 
 #[derive(Component)]
 struct MatchHud;
@@ -133,6 +137,7 @@ struct MatchState {
     round: u32,
     player_wins: u32,
     cpu_wins: u32,
+    local_versus: bool,
     phase: MatchPhase,
     reset_in: f32,
     message: &'static str,
@@ -144,6 +149,7 @@ impl Default for MatchState {
             round: 1,
             player_wins: 0,
             cpu_wins: 0,
+            local_versus: false,
             phase: MatchPhase::Menu,
             reset_in: 0.0,
             message: "Press ENTER to begin",
@@ -200,7 +206,7 @@ fn setup(
     ));
     commands.spawn((
         Text::new(
-            "A / D move    SPACE jump    J strike    K ki blast    LEFT SHIFT dash    ESC pause",
+            "P1: A/D move, SPACE jump, J strike, K ki    P2: ARROWS move, UP jump, N strike, M ki    ESC pause",
         ),
         TextFont {
             font_size: FontSize::Px(17.0),
@@ -215,7 +221,7 @@ fn setup(
         },
     ));
     commands.spawn((
-        Text::new("DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\nPress ENTER to fight"),
+        Text::new("DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\n1 — SOLO vs CPU\n2 — LOCAL 2 PLAYERS"),
         TextFont {
             font_size: FontSize::Px(38.0),
             ..default()
@@ -262,7 +268,9 @@ fn spawn_fighter(commands: &mut Commands, side: Side, position: Vec2) {
             commands.entity(entity).insert(PlayerFighter);
         }
         Side::Cpu => {
-            commands.entity(entity).insert(CpuFighter);
+            commands
+                .entity(entity)
+                .insert((CpuFighter, PlayerTwoFighter));
         }
     }
     commands.spawn((
@@ -305,6 +313,9 @@ fn drive_cpu(
     mut cpu: Single<(&mut Fighter, &Transform), With<CpuFighter>>,
 ) {
     let (fighter, transform) = &mut *cpu;
+    if state.local_versus {
+        return;
+    }
     fighter.intent = FighterIntent::default();
     if state.phase != MatchPhase::Fighting {
         return;
@@ -319,6 +330,31 @@ fn drive_cpu(
     fighter.intent.blast =
         distance.abs() > 245.0 && fighter.ki >= 18 && fighter.blast_cooldown <= 0.0;
     fighter.intent.dash = distance.abs() > 310.0 && fighter.dash_cooldown <= 0.0;
+}
+
+fn read_player_two_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    state: Res<MatchState>,
+    mut fighter: Single<&mut Fighter, With<PlayerTwoFighter>>,
+) {
+    let fighter = &mut *fighter;
+    fighter.intent = FighterIntent::default();
+    if state.phase != MatchPhase::Fighting || !state.local_versus {
+        return;
+    }
+    fighter.intent.movement = (if keyboard.pressed(KeyCode::ArrowRight) {
+        1.0
+    } else {
+        0.0
+    }) - (if keyboard.pressed(KeyCode::ArrowLeft) {
+        1.0
+    } else {
+        0.0
+    });
+    fighter.intent.jump = keyboard.just_pressed(KeyCode::ArrowUp);
+    fighter.intent.strike = keyboard.just_pressed(KeyCode::KeyN);
+    fighter.intent.blast = keyboard.just_pressed(KeyCode::KeyM);
+    fighter.intent.dash = keyboard.just_pressed(KeyCode::ShiftRight);
 }
 
 fn move_fighters(
@@ -508,9 +544,20 @@ fn handle_flow_controls(
     mut fighters: Query<(&mut Fighter, &mut Transform, &mut Sprite)>,
 ) {
     match state.phase {
-        MatchPhase::Menu if keyboard.just_pressed(KeyCode::Enter) => {
+        MatchPhase::Menu
+            if keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Digit1) =>
+        {
+            state.local_versus = false;
             state.phase = MatchPhase::Fighting;
             state.message = "Fight!";
+            for mut visibility in &mut visuals {
+                *visibility = Visibility::Inherited;
+            }
+        }
+        MatchPhase::Menu if keyboard.just_pressed(KeyCode::Digit2) => {
+            state.local_versus = true;
+            state.phase = MatchPhase::Fighting;
+            state.message = "LOCAL FIGHT!";
             for mut visibility in &mut visuals {
                 *visibility = Visibility::Inherited;
             }
@@ -611,7 +658,7 @@ fn refresh_hud(
 ) {
     overlay.0 = match state.phase {
         MatchPhase::Menu => {
-            "DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\nPress ENTER to fight".to_owned()
+            "DRAGON BALL ARENA\n\nGOKU vs VEGETA\n\n1 — SOLO vs CPU\n2 — LOCAL 2 PLAYERS".to_owned()
         }
         MatchPhase::Paused => "PAUSED\n\nPress ESC to resume".to_owned(),
         MatchPhase::RoundOver => format!("{}\n\nNext round...", state.message),

@@ -12,12 +12,11 @@ cargo run
 
 ## Controls
 
-- `Enter`: start a match or play again after the result
+- `1` / `Enter`: start a solo match against the CPU
+- `2`: start a local two-player match
+- `Enter`: play again after the result
 - `Escape`: pause or resume
-- `A` / `D`: move
-- `Space`: jump
-- `J`: close-range strike
-- `K`: spend ki on a projectile
-- `Left Shift`: dash
+- Player 1: `A` / `D` move, `Space` jump, `J` strike, `K` ki blast, `Left Shift` dash
+- Player 2: arrow keys move and jump, `N` strike, `M` ki blast, `Right Shift` dash
 
-A local CPU rival pursues the player, attacks at close range, and throws ki blasts from a distance. Matches use a best-of-three format. A round ends when one fighter's health reaches zero; the next round begins after a short result screen. The opening menu, pause screen, and match result are all rendered by Bevy's native UI.
+A local CPU rival pursues the player, attacks at close range, and throws ki blasts from a distance. Local two-player matches use the same combat loop with keyboard controls for both fighters. Matches use a best-of-three format. A round ends when one fighter's health reaches zero; the next round begins after a short result screen. The opening menu, pause screen, and match result are all rendered by Bevy's native UI.
