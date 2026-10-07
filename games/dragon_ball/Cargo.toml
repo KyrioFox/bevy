@@ -1,0 +1,10 @@
+[package]
+name = "dragon-ball-arena"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bevy = { path = "../..", default-features = false, features = ["2d", "ui"] }
